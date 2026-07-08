@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 const MOCK_SCENARIOS = {
   vizag_pattern: {
@@ -33,6 +33,7 @@ const MOCK_SCENARIOS = {
       { priority: 2, action: "Evacuate Zone B and Zone C — 7 workers",
         rationale: "Gas levels at IDLH threshold", regulatory_basis: "Factory Act S.36(1)(a)", zone: "Zone B", time_sensitive: true },
     ],
+    nl_alert: "CRITICAL: Elevated H2S and CO detected in Zone C with active hot work permit. Immediate evacuation recommended. This matches the Vizag 2025 incident pattern at 97% confidence.",
     rag_context: "Pattern matches Vizag Jan 2025 at 97% confidence. Battery 3 showed identical H2S + CO co-elevation 73 min before explosion.",
     regulatory_violations: ["OISD-GS-1 Clause 7.1", "Factory Act S.36(1)(a)"],
     incident_report_draft: "SAFETY INCIDENT PRELIMINARY REPORT — 12 Jan 2025 22:47...",
@@ -65,6 +66,7 @@ const MOCK_SCENARIOS = {
     compound_triggers: [],
     prediction: { minutes_to_next_threshold: 90, next_threshold: "WARNING", confidence: 0.65, basis: "Stable readings", single_sensor_minutes: 90, lead_time_advantage_minutes: 0 },
     recommended_actions: [{ priority: 1, action: "Continue routine monitoring", rationale: "All systems nominal", regulatory_basis: "OISD-GS-1 Clause 5.1", zone: "All", time_sensitive: false }],
+    nl_alert: null,
     rag_context: null, regulatory_violations: [], incident_report_draft: null, evacuation_triggered: false,
     sensors: {
       "G-07": { sensor_id:"G-07", sensor_type:"H2S", value:1.2, unit:"ppm", status:"NORMAL", threshold_warning:5, threshold_critical:10 },
@@ -91,6 +93,7 @@ const MOCK_SCENARIOS = {
     compound_triggers: [],
     prediction: { minutes_to_next_threshold: 28, next_threshold: "HIGH", confidence: 0.74, basis: "Linear extrapolation", single_sensor_minutes: 28, lead_time_advantage_minutes: 0 },
     recommended_actions: [{ priority: 1, action: "Increase monitoring frequency at G-07", rationale: "H2S trending toward warning threshold", regulatory_basis: "OISD-GS-1 Clause 6.3", zone: "Zone C", time_sensitive: false }],
+    nl_alert: "WARNING: H2S levels rising at G-07 in Zone C. Currently at 9.1 ppm, approaching critical threshold of 10 ppm. Monitor closely.",
     rag_context: null, regulatory_violations: [], incident_report_draft: null, evacuation_triggered: false,
     sensors: {
       "G-07": { sensor_id:"G-07", sensor_type:"H2S", value:9.1, unit:"ppm", status:"WARNING", threshold_warning:5, threshold_critical:10 },
@@ -105,7 +108,7 @@ const MOCK_SCENARIOS = {
       workers_in_hazardous_zones:{"Zone A":3,"Zone B":4,"Zone C":3}, fatigue_flag:false, notes:"G-07 climbing since 21:15." }
   },
 
-  hot_work_gas: {
+  hot_work_conflict: {
     timestamp: "2025-01-12T22:10:00", elapsed_minutes: 55, risk_score: 67, risk_level: "HIGH", previous_score: 51,
     risk_factors: [
       { factor_id: "gas_sensor_anomaly", active: true, weight: 0.30, contribution: 22, description: "Elevated gas at G-07, G-08", regulatory_ref: "OISD-GS-1 Clause 6.3", evidence: ["G-07","G-08"] },
@@ -121,6 +124,7 @@ const MOCK_SCENARIOS = {
     ],
     prediction: { minutes_to_next_threshold: 14, next_threshold: "CRITICAL", confidence: 0.83, basis: "Compound trigger acceleration model", single_sensor_minutes: 14, lead_time_advantage_minutes: 0 },
     recommended_actions: [{ priority: 1, action: "SUSPEND hot work permit PTW-047 immediately", rationale: "Gas + hot work = critical explosion risk", regulatory_basis: "DGFASLI OM-2023-11 Clause 4.3", zone: "Zone C", time_sensitive: true }],
+    nl_alert: "HIGH RISK: Compound trigger detected. Elevated gas AND active hot work permit in Zone C. No single sensor would catch this. Suspend PTW-047 immediately.",
     rag_context: "Compound trigger matches pre-incident conditions at Vizag 2025.", regulatory_violations: ["OISD-GS-1 Clause 7.1"],
     incident_report_draft: null, evacuation_triggered: false,
     sensors: {
@@ -143,17 +147,44 @@ export function useRiskStream() {
   const [assessment, setAssessment] = useState(MOCK_SCENARIOS.vizag_pattern);
   const [connected, setConnected] = useState(false);
   const [scenario, setScenario] = useState("vizag_pattern");
+  const wsRef = useRef(null);
+  const reconnectRef = useRef(null);
+
+  const connect = (currentScenario) => {
+    if (reconnectRef.current) clearTimeout(reconnectRef.current);
+    if (wsRef.current) wsRef.current.close();
+
+    const ws = new WebSocket(`wss://industry-safety-intelligence.onrender.com/ws/stream/${currentScenario}`);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log("✅ Connected!");
+      setConnected(true);
+    };
+
+    ws.onmessage = (e) => {
+      try { setAssessment(JSON.parse(e.data)); } catch(err) {}
+    };
+
+    ws.onerror = () => {
+      console.log("❌ WebSocket error — using mock data");
+      setConnected(false);
+      setAssessment(MOCK_SCENARIOS[currentScenario] || MOCK_SCENARIOS.vizag_pattern);
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+      console.log("🔄 Reconnecting in 3 seconds...");
+      reconnectRef.current = setTimeout(() => connect(currentScenario), 3000);
+    };
+  };
 
   useEffect(() => {
-    const ws = new WebSocket(`ws://localhost:8000/ws/stream/${scenario}`);
-    ws.onopen = () => { setConnected(true); };
-    ws.onmessage = (e) => { try { setAssessment(JSON.parse(e.data)); } catch(err) {} };
-    ws.onerror = () => {
-      setConnected(false);
-      setAssessment(MOCK_SCENARIOS[scenario] || MOCK_SCENARIOS.vizag_pattern);
+    connect(scenario);
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      if (reconnectRef.current) clearTimeout(reconnectRef.current);
     };
-    ws.onclose = () => { setConnected(false); };
-    return () => ws.close();
   }, [scenario]);
 
   const handleSetScenario = (s) => {

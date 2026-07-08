@@ -110,7 +110,7 @@ export function ScenarioSwitcher({ scenario, setScenario }) {
   const options = [
     { id:"normal_ops",    label:"Normal ops",     color:"#22c55e" },
     { id:"gas_rising",    label:"Gas rising",     color:"#f59e0b" },
-    { id:"hot_work_gas",  label:"Hot work + gas", color:"#f97316" },
+    { id:"hot_work_conflict", label:"Hot work + gas", color:"#f97316" },
     { id:"vizag_pattern", label:"Vizag pattern",  color:"#dc2626" },
   ];
   return (
