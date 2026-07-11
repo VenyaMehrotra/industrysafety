@@ -149,6 +149,7 @@ export function useRiskStream() {
   const [scenario, setScenario] = useState("vizag_pattern");
   const wsRef = useRef(null);
   const reconnectRef = useRef(null);
+  const hasLiveData = useRef(false);
 
   const connect = (currentScenario) => {
     if (reconnectRef.current) clearTimeout(reconnectRef.current);
@@ -163,23 +164,30 @@ export function useRiskStream() {
     };
 
     ws.onmessage = (e) => {
-      try { setAssessment(JSON.parse(e.data)); } catch(err) {}
+      try {
+        const data = JSON.parse(e.data);
+        hasLiveData.current = true;
+        setAssessment(data);
+      } catch(err) {}
     };
 
     ws.onerror = () => {
-      console.log("❌ WebSocket error — using mock data");
       setConnected(false);
-      setAssessment(MOCK_SCENARIOS[currentScenario] || MOCK_SCENARIOS.vizag_pattern);
+      if (!hasLiveData.current) {
+        setAssessment(MOCK_SCENARIOS[currentScenario] || MOCK_SCENARIOS.vizag_pattern);
+      }
     };
 
     ws.onclose = () => {
       setConnected(false);
-      console.log("🔄 Reconnecting in 3 seconds...");
+      // Key fix: do NOT touch assessment here at all
+      // just silently reconnect in background
       reconnectRef.current = setTimeout(() => connect(currentScenario), 3000);
     };
   };
 
   useEffect(() => {
+    hasLiveData.current = false;
     connect(scenario);
     return () => {
       if (wsRef.current) wsRef.current.close();
@@ -188,8 +196,9 @@ export function useRiskStream() {
   }, [scenario]);
 
   const handleSetScenario = (s) => {
+    hasLiveData.current = false;
     setScenario(s);
-    if (!connected) setAssessment(MOCK_SCENARIOS[s] || MOCK_SCENARIOS.vizag_pattern);
+    setAssessment(MOCK_SCENARIOS[s] || MOCK_SCENARIOS.vizag_pattern);
   };
 
   return { assessment, connected, scenario, setScenario: handleSetScenario };
